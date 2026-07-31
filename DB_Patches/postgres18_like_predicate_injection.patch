@@ -1,0 +1,630 @@
+diff -ruN a/src/backend/optimizer/path/clausesel.c b/src/backend/optimizer/path/clausesel.c
+--- a/src/backend/optimizer/path/clausesel.c	2026-07-16 09:06:30.823627878 +0000
++++ b/src/backend/optimizer/path/clausesel.c	2026-07-16 09:08:36.861265500 +0000
+@@ -24,6 +24,359 @@
+ #include "utils/lsyscache.h"
+ #include "utils/selfuncs.h"
+ 
++/* END2END >>>>> LIKE-pattern / CardEst selectivity-injection support */
++#include "parser/parsetree.h"
++#include "catalog/pg_type.h"
++#include <stdlib.h>
++#include <string.h>
++
++typedef char TYPCATEGORY;
++#define CARD_EST_QUERY_NUM 20000
++static double sel_ests[CARD_EST_QUERY_NUM];
++static bool sel_ests_initialized = false;
++
++extern bool ml_cardest_enabled;
++extern bool print_single_tbl_queries;
++extern int  query_no;
++extern char *ml_cardest_fname;
++
++static void
++read_from_fspn_estimate(const char *filename)
++{
++	FILE	   *fp = fopen(filename, "r");
++	double		sel_est;
++	int			query_cnt = 0;
++	int			i;
++
++	if (fp == NULL)
++		elog(ERROR, "could not open cardinality estimate file \"%s\"", filename);
++
++	/*
++	 * Unread slots must default to a negative sentinel, not 0.0 -- the
++	 * override check below is `if (new_sel >= 0) s1 = new_sel;`, so a
++	 * zero-initialized array would make every clause past the last line of
++	 * the estimates file silently get overridden to selectivity 0.0
++	 * instead of falling back to Postgres' native restriction_selectivity().
++	 */
++	if (!sel_ests_initialized)
++	{
++		for (i = 0; i < CARD_EST_QUERY_NUM; i++)
++			sel_ests[i] = -1.0;
++		sel_ests_initialized = true;
++	}
++
++	while (fscanf(fp, "%lf", &sel_est) == 1)
++	{
++		if (query_cnt >= CARD_EST_QUERY_NUM)
++			elog(ERROR, "cardinality estimate file \"%s\" exceeds %d entries",
++				 filename, CARD_EST_QUERY_NUM);
++		sel_ests[query_cnt] = sel_est;
++		query_cnt += 1;
++	}
++
++	fclose(fp);
++}
++
++static char **
++splitArrayString(const char *str, int *size)
++{
++	*size = 0;
++
++	for (int i = 0; str[i]; i++)
++	{
++		if (str[i] == ',')
++			(*size)++;
++	}
++	(*size)++;
++
++	char	  **result = (char **) malloc((*size) * sizeof(char *));
++
++	int			start = 1;
++	int			index = 0;
++
++	for (int i = 1; str[i]; i++)
++	{
++		if (str[i] == ',' || str[i] == '}')
++		{
++			int			length = i - start;
++
++			result[index] = (char *) malloc((length + 1) * sizeof(char));
++			if (!result[index])
++			{
++				perror("Memory allocation error");
++				exit(1);
++			}
++
++			strncpy(result[index], str + start, length);
++			result[index][length] = '\0';
++
++			start = i + 1;
++			index++;
++		}
++	}
++
++	return result;
++}
++
++static void
++fprint_const(FILE *fp, const Oid const_type, const TYPCATEGORY type_category, const char *str)
++{
++	if (type_category == TYPCATEGORY_ARRAY)
++	{
++		Oid			element_type_oid;
++		TYPCATEGORY element_type_category;
++		bool		element_type_is_preferred;
++		int			size;
++
++		element_type_oid = get_element_type(const_type);
++		get_type_category_preferred(element_type_oid, &element_type_category, &element_type_is_preferred);
++
++		char	  **element_strings = splitArrayString(str, &size);
++
++		fprintf(fp, "(");
++		for (int i = 0; i < size; i++)
++		{
++			if (i > 0)
++				fprintf(fp, ", ");
++			fprint_const(fp, element_type_oid, element_type_category, element_strings[i]);
++			free(element_strings[i]);
++		}
++		fprintf(fp, ")");
++		free(element_strings);
++	}
++	else if (type_category == TYPCATEGORY_STRING)
++	{
++		size_t		str_len = strlen(str);
++
++		if (str_len >= 2 && str[0] == '"' && str[str_len - 1] == '"')
++		{
++			fprintf(fp, "'");
++			for (size_t i = 1; i < str_len - 1; i++)
++				fprintf(fp, "%c", str[i]);
++			fprintf(fp, "'");
++		}
++		else
++			fprintf(fp, "'%s'", str);
++	}
++	else if (type_category == TYPCATEGORY_DATETIME)
++	{
++		fprintf(fp, "'%s'", str);
++	}
++	else if (type_category == TYPCATEGORY_BOOLEAN || type_category == TYPCATEGORY_NUMERIC)
++	{
++		fprintf(fp, "%s", str);
++	}
++	else if (type_category == TYPCATEGORY_TIMESPAN)
++	{
++		fprintf(fp, "interval '%s'", str);
++	}
++	else
++	{
++		fprintf(fp, "unknown type category %c: %s", type_category, str);
++	}
++}
++
++static void
++fprint_expr(FILE *fp, const Node *expr, const List *rtable)
++{
++	if (expr == NULL)
++	{
++		fprintf(fp, "<>");
++		return;
++	}
++
++	if (IsA(expr, Var))
++	{
++		const Var  *var = (const Var *) expr;
++		char	   *relname,
++				   *attname;
++
++		switch (var->varno)
++		{
++			case INNER_VAR:
++				relname = "INNER";
++				attname = "?";
++				break;
++			case OUTER_VAR:
++				relname = "OUTER";
++				attname = "?";
++				break;
++			case INDEX_VAR:
++				relname = "INDEX";
++				attname = "?";
++				break;
++			default:
++				{
++					RangeTblEntry *rte;
++
++					Assert(var->varno > 0 &&
++						   (int) var->varno <= list_length(rtable));
++					rte = rt_fetch(var->varno, rtable);
++					relname = rte->eref->aliasname;
++					attname = get_rte_attribute_name(rte, var->varattno);
++				}
++				break;
++		}
++		fprintf(fp, "%s.%s", relname, attname);
++	}
++	else if (IsA(expr, Const))
++	{
++		const Const *c = (const Const *) expr;
++		Oid			typoutput;
++		bool		typIsVarlena;
++		char	   *outputstr;
++		TYPCATEGORY type_category;
++		bool		type_is_preferred;
++
++		if (c->constisnull)
++		{
++			fprintf(fp, "NULL");
++			return;
++		}
++
++		getTypeOutputInfo(c->consttype, &typoutput, &typIsVarlena);
++		outputstr = OidOutputFunctionCall(typoutput, c->constvalue);
++		get_type_category_preferred(c->consttype, &type_category, &type_is_preferred);
++		fprint_const(fp, c->consttype, type_category, outputstr);
++		pfree(outputstr);
++	}
++	else if (IsA(expr, OpExpr))
++	{
++		const OpExpr *e = (const OpExpr *) expr;
++		char	   *opname;
++
++		opname = get_opname(e->opno);
++		if (list_length(e->args) > 1)
++		{
++			fprint_expr(fp, get_leftop((const Expr *) e), rtable);
++			fprintf(fp, " %s ", ((opname != NULL) ? opname : "(invalid operator)"));
++			fprint_expr(fp, get_rightop((const Expr *) e), rtable);
++		}
++		else
++		{
++			fprintf(fp, "%s ", ((opname != NULL) ? opname : "(invalid operator)"));
++			fprint_expr(fp, get_leftop((const Expr *) e), rtable);
++		}
++	}
++	else if (IsA(expr, FuncExpr))
++	{
++		const FuncExpr *e = (const FuncExpr *) expr;
++		char	   *funcname;
++		ListCell   *l;
++
++		funcname = get_func_name(e->funcid);
++		if (funcname != NULL && strcmp(funcname, "numeric") == 0)
++		{
++			foreach(l, e->args)
++			{
++				fprint_expr(fp, lfirst(l), rtable);
++				if (lnext(e->args, l))
++					fprintf(fp, ",");
++			}
++			fprintf(fp, "::numeric");
++		}
++		else
++		{
++			fprintf(fp, "%s(", ((funcname != NULL) ? funcname : "(invalid function)"));
++			foreach(l, e->args)
++			{
++				fprint_expr(fp, lfirst(l), rtable);
++				if (lnext(e->args, l))
++					fprintf(fp, ",");
++			}
++			fprintf(fp, ")");
++		}
++	}
++	else if (IsA(expr, ScalarArrayOpExpr))
++	{
++		const ScalarArrayOpExpr *e = (const ScalarArrayOpExpr *) expr;
++		char	   *opname;
++
++		opname = get_opname(e->opno);
++		fprint_expr(fp, linitial(e->args), rtable);
++		fprintf(fp, " %s ", ((opname != NULL) ? opname : "(invalid operator)"));
++		if (e->useOr)
++			fprintf(fp, "ANY ");
++		else
++			fprintf(fp, "ALL ");
++		fprint_expr(fp, lsecond(e->args), rtable);
++	}
++	else if (IsA(expr, BoolExpr))
++	{
++		const BoolExpr *e = (const BoolExpr *) expr;
++		ListCell   *l;
++
++		if (e->boolop == NOT_EXPR)
++		{
++			fprintf(fp, "NOT (");
++			fprint_expr(fp, linitial(e->args), rtable);
++			fprintf(fp, ")");
++		}
++		else
++		{
++			char	   *op_name;
++
++			if (e->boolop == AND_EXPR)
++				op_name = " AND ";
++			else
++				op_name = " OR ";
++			foreach(l, e->args)
++			{
++				fprintf(fp, "(");
++				fprint_expr(fp, lfirst(l), rtable);
++				fprintf(fp, ")");
++				if (lnext(e->args, l))
++					fprintf(fp, "%s", op_name);
++			}
++		}
++	}
++	else if (IsA(expr, RelabelType))
++	{
++		const RelabelType *e = (const RelabelType *) expr;
++
++		fprint_expr(fp, (Node *) e->arg, rtable);
++	}
++	else if (IsA(expr, CaseExpr))
++	{
++		ListCell   *l;
++		const CaseExpr *e = (const CaseExpr *) expr;
++
++		fprintf(fp, "CASE ");
++		foreach(l, e->args)
++		{
++			fprint_expr(fp, lfirst(l), rtable);
++			fprintf(fp, " ");
++		}
++		fprintf(fp, "ELSE ");
++		fprint_expr(fp, (Node *) e->defresult, rtable);
++		fprintf(fp, " END");
++	}
++	else if (IsA(expr, CaseWhen))
++	{
++		const CaseWhen *e = (const CaseWhen *) expr;
++
++		fprintf(fp, "WHEN ");
++		fprint_expr(fp, (Node *) e->expr, rtable);
++		fprintf(fp, "THEN ");
++		fprint_expr(fp, (Node *) e->result, rtable);
++	}
++	else if (IsA(expr, Param))
++		fprintf(fp, "unsupported expr: Param");
++	else if (IsA(expr, SubPlan))
++		fprintf(fp, "unsupported expr: SubPlan");
++	else if (IsA(expr, AlternativeSubPlan))
++		fprintf(fp, "unsupported expr: AlternativeSubPlan");
++	else if (IsA(expr, CoerceViaIO))
++		fprintf(fp, "unsupported expr: CoerceViaIO");
++	else if (IsA(expr, CoerceToDomain))
++		fprintf(fp, "unsupported expr: CoerceToDomain");
++	else if (IsA(expr, CoerceToDomainValue))
++		fprintf(fp, "unsupported expr: CoerceToDomainValue");
++	else
++		fprintf(fp, "unknown expr %d", expr->type);
++}
++/* <<<<< END2END */
++
+ /*
+  * Data structure for accumulating info about possible range-query
+  * clause pairs in clauselist_selectivity.
+@@ -849,6 +1202,40 @@
+ 										 opclause->args,
+ 										 opclause->inputcollid,
+ 										 varRelid);
++
++			/* END2END >>>>> selectivity-injection support
++			 *
++			 * This is where single-relation LIKE-predicates (col LIKE 'pat%')
++			 * land, since they are OpExprs handled generically here. We are
++			 * already inside the else-branch of treat_as_join_clause(), so no
++			 * separate join/restriction heuristic is needed.
++			 */
++			if (ml_cardest_enabled)
++			{
++				if (query_no == 0)
++					read_from_fspn_estimate(ml_cardest_fname);
++
++				if (query_no < CARD_EST_QUERY_NUM)
++				{
++					double		new_sel = sel_ests[query_no];
++
++					if (new_sel >= 0)
++						s1 = new_sel;
++				}
++				query_no++;
++			}
++			if (print_single_tbl_queries)
++			{
++				FILE	   *f = fopen("predicates.txt", "a+");
++
++				if (f != NULL)
++				{
++					fprint_expr(f, clause, root->parse->rtable);
++					fprintf(f, ",%f\n", s1);
++					fclose(f);
++				}
++			}
++			/* <<<<< END2END */
+ 		}
+ 
+ 		/*
+diff -ruN a/src/backend/optimizer/path/costsize.c b/src/backend/optimizer/path/costsize.c
+--- a/src/backend/optimizer/path/costsize.c	2026-07-16 09:06:30.831612837 +0000
++++ b/src/backend/optimizer/path/costsize.c	2026-07-16 09:07:32.572608191 +0000
+@@ -109,6 +109,16 @@
+ #include "utils/spccache.h"
+ #include "utils/tuplesort.h"
+ 
++/* END2END >>>>> selectivity-injection support (globals + infra only;
++ * actual injection happens per-clause in clausesel.c) */
++#include "nodes/print.h"
++#include "catalog/pg_type.h"
++#include <unistd.h>
++#include <time.h>
++#include <stdlib.h>
++/* <<<<< END2END */
++
++
+ 
+ #define LOG2(x)  (log(x) / 0.693147180559945)
+ 
+@@ -204,6 +214,63 @@
+ static double page_size(double tuples, int width);
+ static double get_parallel_divisor(Path *path);
+ 
++/* END2END >>>>> selectivity-injection support */
++int         query_no = 0;
++int         join_est_no = 0;
++bool        ml_cardest_enabled = false;
++bool        ml_joinest_enabled = false;
++bool        debug_card_est = false;
++bool        print_sub_queries = false;
++bool        print_single_tbl_queries = false;
++char        *ml_cardest_fname = NULL;
++char        *ml_joinest_fname = NULL;
++
++static void print_est_card(const char *func_name, double card);
++static void print_query_no(const char *func_name);
++static int  StringCompare(const void *a, const void *b);
++
++static void
++print_query_no(const char *func_name)
++{
++	FILE	   *file = fopen("costsize.log", "a+");
++	time_t		rawtime;
++	struct tm  *timeinfo;
++	char		time_buffer[128];
++
++	time(&rawtime);
++	timeinfo = localtime(&rawtime);
++	strftime(time_buffer, sizeof(time_buffer), "%Y/%m/%d %H:%M:%S", timeinfo);
++
++	fprintf(file, "%s: pid[%d] in [%s]: query num: %d\n", time_buffer, getpid(), func_name, query_no);
++	fclose(file);
++}
++
++static void
++print_est_card(const char *func_name, double card_est)
++{
++	FILE	   *file = fopen("costsize.log", "a+");
++	time_t		rawtime;
++	struct tm  *timeinfo;
++	char		time_buffer[128];
++
++	time(&rawtime);
++	timeinfo = localtime(&rawtime);
++	strftime(time_buffer, sizeof(time_buffer), "%Y/%m/%d %H:%M:%S", timeinfo);
++
++	fprintf(file, "%s: pid[%d] in [%s]: %0.9f\n", time_buffer, getpid(), func_name, card_est);
++	fclose(file);
++}
++
++static int
++StringCompare(const void *a, const void *b)
++{
++	char const **char_a = (char const **) a;
++	char const **char_b = (char const **) b;
++
++	return strcmp(*char_a, *char_b);
++}
++/* <<<<< END2END */
++
+ 
+ /*
+  * clamp_row_est
+diff -ruN a/src/backend/utils/misc/guc_tables.c b/src/backend/utils/misc/guc_tables.c
+--- a/src/backend/utils/misc/guc_tables.c	2026-07-16 09:06:30.843641388 +0000
++++ b/src/backend/utils/misc/guc_tables.c	2026-07-16 09:07:54.624654819 +0000
+@@ -2143,6 +2143,58 @@
+ 		NULL, NULL, NULL
+ 	},
+ 
++	/* END2END >>>>> selectivity-injection support */
++	{
++		{"ml_cardest_enabled", PGC_USERSET, UNGROUPED,
++			gettext_noop("Enable ML-based single-table cardinality estimation injection."),
++			NULL
++		},
++		&ml_cardest_enabled,
++		false,
++		NULL, NULL, NULL
++	},
++
++	{
++		{"ml_joinest_enabled", PGC_USERSET, UNGROUPED,
++			gettext_noop("Enable ML-based join cardinality estimation injection."),
++			NULL
++		},
++		&ml_joinest_enabled,
++		false,
++		NULL, NULL, NULL
++	},
++
++	{
++		{"debug_card_est", PGC_USERSET, UNGROUPED,
++			gettext_noop("Enable cardinality estimation debug logging."),
++			NULL
++		},
++		&debug_card_est,
++		false,
++		NULL, NULL, NULL
++	},
++
++	{
++		{"print_single_tbl_queries", PGC_USERSET, UNGROUPED,
++			gettext_noop("Log single-table restriction clauses and estimates."),
++			NULL
++		},
++		&print_single_tbl_queries,
++		false,
++		NULL, NULL, NULL
++	},
++
++	{
++		{"print_sub_queries", PGC_USERSET, UNGROUPED,
++			gettext_noop("Log join sub-plan relations and estimates."),
++			NULL
++		},
++		&print_sub_queries,
++		false,
++		NULL, NULL, NULL
++	},
++	/* <<<<< END2END */
++
+ 	/* End-of-list marker */
+ 	{
+ 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
+@@ -3860,6 +3912,28 @@
+ 		NULL, NULL, NULL
+ 	},
+ 
++	/* END2END >>>>> selectivity-injection support */
++	{
++		{"query_no", PGC_USERSET, UNGROUPED,
++			gettext_noop("Sets the sequential clause counter for cardinality estimate injection."),
++			NULL
++		},
++		&query_no,
++		0, 0, INT_MAX,
++		NULL, NULL, NULL
++	},
++
++	{
++		{"join_est_no", PGC_USERSET, UNGROUPED,
++			gettext_noop("Sets the sequential join-estimate counter for cardinality estimate injection."),
++			NULL
++		},
++		&join_est_no,
++		0, 0, INT_MAX,
++		NULL, NULL, NULL
++	},
++	/* <<<<< END2END */
++
+ 	/* End-of-list marker */
+ 	{
+ 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
+@@ -4984,6 +5058,28 @@
+ 		check_log_connections, assign_log_connections, NULL
+ 	},
+ 
++	/* END2END >>>>> selectivity-injection support */
++	{
++		{"ml_cardest_fname", PGC_USERSET, UNGROUPED,
++			gettext_noop("File name containing externally supplied single-table selectivity/cardinality estimates."),
++			NULL
++		},
++		&ml_cardest_fname,
++		"",
++		NULL, NULL, NULL
++	},
++
++	{
++		{"ml_joinest_fname", PGC_USERSET, UNGROUPED,
++			gettext_noop("File name containing externally supplied join cardinality estimates."),
++			NULL
++		},
++		&ml_joinest_fname,
++		"",
++		NULL, NULL, NULL
++	},
++	/* <<<<< END2END */
++
+ 
+ 	/* End-of-list marker */
+ 	{
+diff -ruN a/src/include/optimizer/cost.h b/src/include/optimizer/cost.h
+--- a/src/include/optimizer/cost.h	2026-07-16 09:06:30.840136844 +0000
++++ b/src/include/optimizer/cost.h	2026-07-16 09:07:54.589322182 +0000
+@@ -72,6 +72,18 @@
+ extern PGDLLIMPORT bool enable_async_append;
+ extern PGDLLIMPORT int constraint_exclusion;
+ 
++/* END2END >>>>> selectivity-injection support */
++extern PGDLLIMPORT int   query_no;
++extern PGDLLIMPORT int   join_est_no;
++extern PGDLLIMPORT bool  ml_cardest_enabled;
++extern PGDLLIMPORT bool  ml_joinest_enabled;
++extern PGDLLIMPORT bool  debug_card_est;
++extern PGDLLIMPORT bool  print_sub_queries;
++extern PGDLLIMPORT bool  print_single_tbl_queries;
++extern PGDLLIMPORT char *ml_cardest_fname;
++extern PGDLLIMPORT char *ml_joinest_fname;
++/* <<<<< END2END */
++
+ extern double index_pages_fetched(double tuples_fetched, BlockNumber pages,
+ 								  double index_pages, PlannerInfo *root);
+ extern void cost_seqscan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
