@@ -1,5 +1,5 @@
 
-# PostgreSQL 18.0 — LIKE-Predicate Selectivity Injection
+# PostgreSQL 18.0
 
 postgres18_like_predicate_injection.patch extends PostgreSQL 18.0's query optimizer to accept externally
 supplied selectivity estimates for single-relation restriction clauses
@@ -36,7 +36,7 @@ stats=# SET ml_cardest_enabled = on;
 stats=# SET query_no = 0;
 stats=# SET ml_cardest_fname = '/absolute/path/to/selectivities.txt';
 ```
-# DuckDB v1.6.0-dev11215 — LIKE-Predicate Selectivity Injection
+# DuckDB v1.6.0-dev11215 
 
 This patch extends DuckDB to accept externally supplied selectivity
 estimates for `LIKE`-predicates, and reads them from a plain text file
