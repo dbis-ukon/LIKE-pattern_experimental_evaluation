@@ -36,3 +36,22 @@ stats=# SET ml_cardest_enabled = on;
 stats=# SET query_no = 0;
 stats=# SET ml_cardest_fname = '/absolute/path/to/selectivities.txt';
 ```
+# DuckDB v1.6.0-dev11215 — LIKE-Predicate Selectivity Injection
+
+This patch extends DuckDB to accept externally supplied selectivity
+estimates for `LIKE`-predicates, and reads them from a plain text file
+during query optimization.
+
+## Build
+
+```bash
+git clone https://github.com/duckdb/duckdb.git
+cd duckdb
+git checkout b95e49bf7a
+patch -p1 < duckdb_1.6.0_like_predicate_injection.patch
+mkdir -p build/release && cd build/release
+cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ../..
+cmake --build . --config Release
+echo 'export PATH='"$(pwd)"':$PATH' >> ~/.bashrc
+source ~/.bashrc
+```
