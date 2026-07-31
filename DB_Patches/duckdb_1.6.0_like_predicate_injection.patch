@@ -1,0 +1,484 @@
+diff -ruN '--exclude=*.bak*' duckdb-clean/src/include/duckdb/optimizer/like_selectivity.hpp duckdb/src/include/duckdb/optimizer/like_selectivity.hpp
+--- duckdb-clean/src/include/duckdb/optimizer/like_selectivity.hpp	1970-01-01 01:00:00.000000000 +0100
++++ duckdb/src/include/duckdb/optimizer/like_selectivity.hpp	2026-07-23 12:48:52.246530995 +0200
+@@ -0,0 +1,51 @@
++//===----------------------------------------------------------------------===//
++//                         DuckDB
++//
++// duckdb/optimizer/like_selectivity.hpp
++//
++//
++//===----------------------------------------------------------------------===//
++
++#pragma once
++
++#include "duckdb/common/string.hpp"
++#include "duckdb/common/unordered_map.hpp"
++
++namespace duckdb {
++
++class Expression;
++
++//! Optional, file-backed overrides for LIKE-filter selectivity estimation.
++//! Absent any entry for a given pattern, callers should fall back to their own
++//! existing default behavior - this class never invents a default of its own
++//! beyond DEFAULT_LIKE_SELECTIVITY, which Lookup() uses but TryLookup() does not.
++class LikeSelectivity {
++public:
++	static constexpr double DEFAULT_LIKE_SELECTIVITY = 0.2;
++
++public:
++	static LikeSelectivity &Get();
++
++	//! Look up a pattern, returning DEFAULT_LIKE_SELECTIVITY on a miss.
++	double Lookup(const string &pattern) const;
++	//! Look up a pattern; only returns true (and sets selectivity_out) on an explicit
++	//! file entry. Callers use this when a miss should mean "do nothing" rather than
++	//! "apply some default."
++	bool TryLookup(const string &pattern, double &selectivity_out) const;
++
++	//! Shared matching logic for cardinality-estimation code paths. Inspects expr for a
++	//! plain LIKE comparison ("~~") against a constant VARCHAR pattern; if the file has an
++	//! explicit override for that exact pattern, sets selectivity_out and returns true.
++	//! Returns false for anything else - including a well-formed LIKE with no configured
++	//! override - so callers never silently get a fabricated default from this call.
++	static bool TryGetLikeSelectivity(const Expression &expr, double &selectivity_out);
++
++private:
++	LikeSelectivity();
++	string GetFilePath() const;
++	void Load();
++
++	unordered_map<string, double> estimates;
++};
++
++} // namespace duckdb
+diff -ruN '--exclude=*.bak*' duckdb-clean/src/optimizer/CMakeLists.txt duckdb/src/optimizer/CMakeLists.txt
+--- duckdb-clean/src/optimizer/CMakeLists.txt	2026-07-31 16:22:35.698188216 +0200
++++ duckdb/src/optimizer/CMakeLists.txt	2026-07-23 12:58:39.393088792 +0200
+@@ -33,6 +33,7 @@
+   join_filter_pushdown_optimizer.cpp
+   late_materialization.cpp
+   late_materialization_helper.cpp
++  like_selectivity.cpp 
+   optimizer.cpp
+   outer_join_simplification.cpp
+   partial_aggregate_pushdown.cpp
+diff -ruN '--exclude=*.bak*' duckdb-clean/src/optimizer/join_order/relation_manager.cpp duckdb/src/optimizer/join_order/relation_manager.cpp
+--- duckdb-clean/src/optimizer/join_order/relation_manager.cpp	2026-07-31 16:22:36.329221911 +0200
++++ duckdb/src/optimizer/join_order/relation_manager.cpp	2026-07-24 14:31:23.181760810 +0200
+@@ -11,6 +11,8 @@
+ #include "duckdb/planner/expression_iterator.hpp"
+ #include "duckdb/planner/operator/list.hpp"
+ #include "duckdb/planner/expression/bound_comparison_expression.hpp"
++#include "duckdb/optimizer/like_selectivity.hpp"
++#include "duckdb/planner/operator/logical_filter.hpp"
+ 
+ namespace duckdb {
+ 
+@@ -249,7 +251,21 @@
+ 		stats.cardinality = MinValue(limit.limit_val.GetConstantValue(), stats.cardinality);
+ 	}
+ }
+-
++static double GetLikeOverrideSelectivity(vector<reference<LogicalOperator>> &filter_ops, bool &found) {
++	double combined = 1.0;
++	found = false;
++	for (auto &filter_ref : filter_ops) {
++		auto &filter_op = filter_ref.get().Cast<LogicalFilter>();
++		for (auto &expr : filter_op.expressions) {
++			double sel;
++			if (LikeSelectivity::TryGetLikeSelectivity(*expr, sel)) {
++				combined *= sel;
++				found = true;
++			}
++		}
++	}
++	return combined;
++}
+ void RelationManager::AddRelationWithChildren(JoinOrderOptimizer &optimizer, LogicalOperator &op,
+                                               LogicalOperator &input_op, optional_ptr<LogicalOperator> parent,
+                                               RelationStats &child_stats, optional_ptr<LogicalOperator> limit_op,
+@@ -258,8 +274,12 @@
+ 	auto child_optimizer = optimizer.CreateChildOptimizer();
+ 	op.children[0] = child_optimizer.Optimize(std::move(op.children[0]), &child_stats);
+ 	if (!datasource_filters.empty()) {
+-		child_stats.cardinality = LossyNumericCast<idx_t>(static_cast<double>(child_stats.cardinality) *
+-		                                                  RelationStatisticsHelper::DEFAULT_SELECTIVITY);
++		bool found_override = false;
++		double selectivity = GetLikeOverrideSelectivity(datasource_filters, found_override);
++		if (!found_override) {
++			selectivity = RelationStatisticsHelper::DEFAULT_SELECTIVITY;
++		}
++		child_stats.cardinality = LossyNumericCast<idx_t>(static_cast<double>(child_stats.cardinality) * selectivity);
+ 	}
+ 	ModifyStatsIfLimit(limit_op.get(), child_stats);
+ 	AddRelation(input_op, parent, child_stats);
+@@ -318,8 +338,12 @@
+ 		auto combined_stats = RelationStatisticsHelper::CombineStatsOfNonReorderableOperator(*op, children_stats);
+ 		op->SetEstimatedCardinality(combined_stats.cardinality);
+ 		if (!datasource_filters.empty()) {
+-			combined_stats.cardinality = (idx_t)MaxValue(
+-			    double(combined_stats.cardinality) * RelationStatisticsHelper::DEFAULT_SELECTIVITY, (double)1);
++			bool found_override = false;
++			double selectivity = GetLikeOverrideSelectivity(datasource_filters, found_override);
++			if (!found_override) {
++				selectivity = RelationStatisticsHelper::DEFAULT_SELECTIVITY;
++			}
++			combined_stats.cardinality = (idx_t)MaxValue(double(combined_stats.cardinality) * selectivity, (double)1);
+ 		}
+ 		AddRelation(input_op, parent, combined_stats);
+ 		return true;
+@@ -353,8 +377,12 @@
+ 		// the extracted cardinality should be set for window
+ 		window.SetEstimatedCardinality(operator_stats.cardinality);
+ 		if (!datasource_filters.empty()) {
+-			operator_stats.cardinality = LossyNumericCast<idx_t>(static_cast<double>(operator_stats.cardinality) *
+-			                                                     RelationStatisticsHelper::DEFAULT_SELECTIVITY);
++			bool found_override = false;
++			double selectivity = GetLikeOverrideSelectivity(datasource_filters, found_override);
++			if (!found_override) {
++				selectivity = RelationStatisticsHelper::DEFAULT_SELECTIVITY;
++			}
++			operator_stats.cardinality = LossyNumericCast<idx_t>(static_cast<double>(operator_stats.cardinality) * selectivity);
+ 		}
+ 		ModifyStatsIfLimit(limit_op.get(), child_stats);
+ 		AddAggregateOrWindowRelation(input_op, parent, operator_stats, op->type);
+@@ -434,8 +462,12 @@
+ 		// table scan, apply another selectivity.
+ 		get.SetEstimatedCardinality(stats.cardinality);
+ 		if (!datasource_filters.empty()) {
+-			stats.cardinality =
+-			    (idx_t)MaxValue(double(stats.cardinality) * RelationStatisticsHelper::DEFAULT_SELECTIVITY, (double)1);
++			bool found_override = false;
++			double selectivity = GetLikeOverrideSelectivity(datasource_filters, found_override);
++			if (!found_override) {
++				selectivity = RelationStatisticsHelper::DEFAULT_SELECTIVITY;
++			}
++			stats.cardinality = (idx_t)MaxValue(double(stats.cardinality) * selectivity, (double)1);
+ 		}
+ 		ModifyStatsIfLimit(limit_op.get(), stats);
+ 		AddRelation(input_op, parent, stats);
+diff -ruN '--exclude=*.bak*' duckdb-clean/src/optimizer/join_order/relation_statistics_helper.cpp duckdb/src/optimizer/join_order/relation_statistics_helper.cpp
+--- duckdb-clean/src/optimizer/join_order/relation_statistics_helper.cpp	2026-07-31 16:22:35.702188430 +0200
++++ duckdb/src/optimizer/join_order/relation_statistics_helper.cpp	2026-07-24 14:46:25.079005998 +0200
+@@ -1,4 +1,5 @@
+ #include "duckdb/optimizer/join_order/relation_statistics_helper.hpp"
++#include "duckdb/optimizer/like_selectivity.hpp"
+ #include "duckdb/planner/expression/list.hpp"
+ #include "duckdb/planner/operator/list.hpp"
+ #include "duckdb/planner/filter/expression_filter.hpp"
+@@ -239,6 +240,7 @@
+ 
+ 	if (get.table_filters.HasFilters()) {
+ 		bool has_non_optional_filters = false;
++		bool has_like_override = false;
+ 		for (auto &entry : get.table_filters) {
+ 			auto &column_index = get.GetColumnIndex(entry.GetIndex());
+ 			auto column_statistics = GetColumnStatistics(get, context, column_index);
+@@ -249,14 +251,27 @@
+ 				cardinality_after_filters = MinValue(cardinality_after_filters, cardinality_with_filter);
+ 			}
+ 
++			// Check for a user-provided LIKE selectivity override before falling back to the flat
++			// default below. This only fires on an explicit file entry for this exact pattern; a
++			// miss leaves cardinality_after_filters untouched, just like the "no equality filter"
++			// case already does.
++// First try to get selectivity from cache (populated during optimization)
++			auto &expr_filter =
++			    ExpressionFilter::GetExpressionFilter(entry.Filter(), "RelationStatisticsHelper::ExtractGetStats");
++			double like_selectivity;
++			if (LikeSelectivity::TryGetLikeSelectivity(*expr_filter.expr, like_selectivity)) {
++				idx_t cardinality_with_filter =
++				    LossyNumericCast<idx_t>(double(base_table_cardinality) * like_selectivity);
++				cardinality_after_filters = MinValue(cardinality_after_filters, cardinality_with_filter);
++				has_like_override = true;
++			}
++
+ 			if (!ExpressionFilter::IsOptionalFilter(entry.Filter())) {
+ 				has_non_optional_filters = true;
+ 			}
+ 		}
+-		// if the above code didn't find an equality filter (i.e country_code = "[us]")
+-		// and there are other table filters (i.e cost > 50), use default selectivity.
+ 		bool has_equality_filter = (cardinality_after_filters != base_table_cardinality);
+-		if (!has_equality_filter && has_non_optional_filters) {
++		if (!has_equality_filter && !has_like_override && has_non_optional_filters) {
+ 			cardinality_after_filters = MaxValue<idx_t>(
+ 			    LossyNumericCast<idx_t>(double(base_table_cardinality) * RelationStatisticsHelper::DEFAULT_SELECTIVITY),
+ 			    1U);
+diff -ruN '--exclude=*.bak*' duckdb-clean/src/optimizer/like_selectivity.cpp duckdb/src/optimizer/like_selectivity.cpp
+--- duckdb-clean/src/optimizer/like_selectivity.cpp	1970-01-01 01:00:00.000000000 +0100
++++ duckdb/src/optimizer/like_selectivity.cpp	2026-07-31 15:15:48.737618071 +0200
+@@ -0,0 +1,260 @@
++#include "duckdb/optimizer/like_selectivity.hpp"
++
++#include "duckdb/planner/expression/bound_comparison_expression.hpp"
++#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
++#include "duckdb/planner/expression/bound_constant_expression.hpp"
++#include "duckdb/planner/expression/bound_function_expression.hpp"
++#include "duckdb/planner/expression/bound_operator_expression.hpp"
++#include <cstdlib>
++#include <fstream>
++
++namespace duckdb {
++
++LikeSelectivity &LikeSelectivity::Get() {
++	static LikeSelectivity instance;
++	return instance;
++}
++
++LikeSelectivity::LikeSelectivity() {
++	Load();
++}
++
++string LikeSelectivity::GetFilePath() const {
++	const char *env_path = std::getenv("DUCKDB_LIKE_SELECTIVITY_FILE");
++	if (env_path && *env_path) {
++		return string(env_path);
++	}
++	return "like_selectivity.txt";
++}
++
++void LikeSelectivity::Load() {
++	std::ifstream file(GetFilePath());
++	if (!file.good()) {
++		// Optional file: absence just means every pattern uses the default.
++		return;
++	}
++
++	string line;
++	while (std::getline(file, line)) {
++		if (line.empty() || line[0] == '#') {
++			continue;
++		}
++
++		// Split on the LAST tab: LIKE patterns frequently contain spaces
++		// (e.g. "% foo bar %"), so whitespace-based tokenization is unsafe.
++		auto tab_pos = line.find_last_of('\t');
++		if (tab_pos == string::npos || tab_pos == 0) {
++			// Malformed line: skip it, but keep loading the rest of the
++			// file instead of aborting on the first bad entry.
++			continue;
++		}
++
++		auto pattern = line.substr(0, tab_pos);
++		auto value_str = line.substr(tab_pos + 1);
++
++		double value;
++		try {
++			size_t chars_consumed;
++			value = std::stod(value_str, &chars_consumed);
++			if (chars_consumed != value_str.size()) {
++				continue;
++			}
++		} catch (...) {
++			continue;
++		}
++
++		// Selectivities are probabilities: clamp defensively so a bad or
++		// adversarial file entry can't make the optimizer inflate a
++		// filtered cardinality above the pre-filter cardinality.
++		if (value < 0.0) {
++			value = 0.0;
++		} else if (value > 1.0) {
++			value = 1.0;
++		}
++
++		estimates[pattern] = value;
++	}
++}
++
++double LikeSelectivity::Lookup(const string &pattern) const {
++	auto entry = estimates.find(pattern);
++	if (entry != estimates.end()) {
++		return entry->second;
++	}
++	return DEFAULT_LIKE_SELECTIVITY;
++}
++
++bool LikeSelectivity::TryLookup(const string &pattern, double &selectivity_out) const {
++	auto entry = estimates.find(pattern);
++	if (entry == estimates.end()) {
++		return false;
++	}
++	selectivity_out = entry->second;
++	return true;
++}
++
++//! Checks whether `upper` is the FilterCombiner's standard range-encoding
++//! of a prefix pattern whose lower bound is `lower` - i.e. `upper` equals
++//! `lower` with trailing 0xFF bytes stripped and the final remaining byte
++//! incremented by one (the smallest string that is NOT prefixed by `lower`).
++//! Handles the common single-increment case; does not attempt every possible
++//! carry/overflow edge case DuckDB's internal encoder might produce.
++static bool IsPrefixRangeUpperBound(const string &lower, const string &upper) {
++	if (lower.empty()) {
++		return false;
++	}
++	size_t end = lower.size();
++	while (end > 0 && static_cast<unsigned char>(lower[end - 1]) == 0xFF) {
++		end--;
++	}
++	if (end == 0) {
++		return false;
++	}
++	string expected = lower.substr(0, end - 1);
++	expected += static_cast<char>(static_cast<unsigned char>(lower[end - 1]) + 1);
++	return upper == expected;
++}
++
++bool LikeSelectivity::TryGetLikeSelectivity(const Expression &expr, double &selectivity_out) {
++	// FilterCombiner rewrites simple prefix patterns ('word%') into a range:
++	// (col >= 'word') AND (col < '<word, last byte incremented>'). Recognize
++	// that specific shape and reconstruct the original prefix pattern.
++	// NOTE: in this DuckDB version, comparisons (>=, <) are represented as
++	// BoundFunctionExpression, not a separate expression class - use the
++	// BoundComparisonExpression static helpers (Left/Right/IsComparison) to
++	// inspect them, and the child's own GetExpressionType() for which
++	// comparison it is (kept in sync with the function via SetType/FlipType).
++	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
++		auto &conj = expr.Cast<BoundConjunctionExpression>();
++		if (conj.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
++			return false;
++		}
++		auto &conj_children = conj.GetChildren();
++		if (conj_children.size() != 2) {
++			return false;
++		}
++		string lower_bound, upper_bound;
++		bool has_lower = false, has_upper = false;
++		for (auto &child : conj_children) {
++			if (child->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
++				return false;
++			}
++			if (!BoundComparisonExpression::IsComparison(*child)) {
++				return false;
++			}
++			auto &func_expr = child->Cast<BoundFunctionExpression>();
++			auto &right_expr = BoundComparisonExpression::Right(func_expr);
++			if (right_expr.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
++				return false;
++			}
++			auto &val = right_expr.Cast<BoundConstantExpression>().GetValue();
++			if (val.IsNull() || val.type().id() != LogicalTypeId::VARCHAR) {
++				return false;
++			}
++			auto bound_str = StringValue::Get(val);
++			auto cmp_type = child->GetExpressionType();
++			if (cmp_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
++				lower_bound = bound_str;
++				has_lower = true;
++			} else if (cmp_type == ExpressionType::COMPARE_LESSTHAN) {
++				upper_bound = bound_str;
++				has_upper = true;
++			} else {
++				return false;
++			}
++		}
++		if (has_lower && has_upper && IsPrefixRangeUpperBound(lower_bound, upper_bound)) {
++			string reconstructed_pattern = lower_bound + "%";
++			return LikeSelectivity::Get().TryLookup(reconstructed_pattern, selectivity_out);
++		}
++		return false;
++	}
++
++	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
++	    expr.GetExpressionType() == ExpressionType::OPERATOR_NOT) {
++		// A simple single-wildcard NOT LIKE pattern (e.g. NOT LIKE '%word%') gets
++		// optimizer-transformed into "NOT contains(col, 'word')" rather than staying
++		// as the literal "!~~" operator. Recurse into the positive child expression
++		// and negate its selectivity (1 - selectivity), same as the "!~~" case below.
++		auto &op_expr = expr.Cast<BoundOperatorExpression>();
++		auto &children = op_expr.GetChildren();
++		if (children.size() != 1) {
++			return false;
++		}
++		double positive_selectivity;
++		if (TryGetLikeSelectivity(*children[0], positive_selectivity)) {
++			selectivity_out = 1.0 - positive_selectivity;
++			return true;
++		}
++		return false;
++	}
++
++	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
++		return false;
++	}
++	auto &func = expr.Cast<BoundFunctionExpression>();
++	auto &children = func.GetChildren();
++	if (children.size() != 2) {
++		return false;
++	}
++
++	auto &pattern_expr = *children[1];
++	if (pattern_expr.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
++		// non-constant pattern (e.g. a correlated column): nothing to look up
++		return false;
++	}
++	auto &pattern_value = pattern_expr.Cast<BoundConstantExpression>().GetValue();
++	if (pattern_value.IsNull() || pattern_value.type().id() != LogicalTypeId::VARCHAR) {
++		return false;
++	}
++	auto &raw = StringValue::Get(pattern_value);
++
++	// DuckDB's LikeOptimizationRule transforms LIKE patterns:
++	// - '%word%' -> contains(col, 'word')     [strip both wildcards]
++	// - 'word%'  -> prefix(col, 'word')       [strip trailing wildcard]
++	// - '%word'  -> suffix(col, 'word')       [strip leading wildcard]
++	// - simple patterns stay as ~~ (LIKE operator)
++	//
++	// FilterCombiner also transforms prefix patterns into ranges:
++	// - 'word%'  -> col >= 'word' AND col < '<word with last char incremented>'
++	//
++	// We reconstruct the original LIKE pattern from these transformed forms
++	// to do exact match lookup in the selectivity file.
++	// 
++	// NOT LIKE ("!~~") and GLOB variants ("~~~", "!~~~") are intentionally left unhandled.
++	auto &name = func.Function().GetName();
++	string pattern;
++
++	if (name == "~~") {
++		// Original LIKE pattern, no transformation needed
++		pattern = raw;
++	} else if (name == "!~~") {
++		// Original NOT LIKE pattern: look up the positive pattern, then negate.
++		double positive_selectivity;
++		if (LikeSelectivity::Get().TryLookup(raw, positive_selectivity)) {
++			selectivity_out = 1.0 - positive_selectivity;
++			return true;
++		}
++		return false;
++	} else if (name == "contains") {
++		// Reconstructed from '%word%' pattern (both wildcards stripped)
++		pattern = "%" + raw + "%";
++	} else if (name == "prefix") {
++		// Reconstructed from 'word%' pattern (trailing wildcard stripped)
++		pattern = raw + "%";
++	} else if (name == "suffix") {
++		// Reconstructed from '%word' pattern (leading wildcard stripped)
++		pattern = "%" + raw;
++	} else if (name == ">=") {
++		// Reconstructed from range optimization of 'word%' pattern
++		// The >= contains the prefix part of what was 'word%'
++		pattern = raw + "%";
++	} else {
++		return false;
++	}
++
++	// Do exact match lookup in the file
++	return LikeSelectivity::Get().TryLookup(pattern, selectivity_out);
++}
++
++} // namespace duckdb
+diff -ruN '--exclude=*.bak*' duckdb-clean/src/optimizer/rule/like_optimizations.cpp duckdb/src/optimizer/rule/like_optimizations.cpp
+--- duckdb-clean/src/optimizer/rule/like_optimizations.cpp	2026-07-31 16:22:35.706188643 +0200
++++ duckdb/src/optimizer/rule/like_optimizations.cpp	2026-07-31 14:02:49.930476029 +0200
+@@ -145,6 +145,7 @@
+ 
+ 	auto constant_value = ExpressionExecutor::EvaluateScalar(GetContext(), constant_expr);
+ 	D_ASSERT(constant_value.type() == constant_expr.GetReturnType());
++
+ 	auto &patt_str = StringValue::Get(constant_value);
+ 
+ 	bool is_not_like = root.Function().GetName() == "!~~" || root.Function().GetName() == "!~~~";
