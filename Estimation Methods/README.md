@@ -1,8 +1,6 @@
-## To Run Cardinality Estimation Methods
 
-To run each cardinality estimation method, please follow the instructions provided in its `README.md` file.
 
-### Source Code
+# Source Code for LPLM, Astrid, SSCard
 
 | Method | Repository |
 |--------|------------|
