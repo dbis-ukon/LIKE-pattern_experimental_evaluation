@@ -6,4 +6,4 @@ Cardinality estimation is a fundamental component of cost-based query optimizati
 
 | Method | Repository |
 |--------|------------|
-| SQL Storm    | (https://github.com/SQL-Storm/SQLStorm)|
+| SQL Storm    | https://github.com/SQL-Storm/SQLStorm|
