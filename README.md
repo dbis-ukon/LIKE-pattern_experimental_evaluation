@@ -104,4 +104,4 @@ For each cardinality estimation method, prepare a method_column.txt file contain
 
 ## Dataset
 
-We use the IMDB dataset for our experiments. The dataset, along with its schema, can be downloaded [here](https://cloud.uni-konstanz.de/index.php/s/SjiRD5rHRFDHEQb).
+We use the IMDB dataset for our experiments. The dataset, along with its schema, can be downloaded [here]([https://cloud.uni-konstanz.de/index.php/s/SjiRD5rHRFDHEQb](https://cloud.uni-konstanz.de/index.php/s/s2mY4QTzJN3NnA8)).
