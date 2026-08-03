@@ -13,21 +13,15 @@ import statistics
 DUCKDB_BINARY = "./build/release/duckdb"
 DATABASE = "imdb.db"
 
-INPUT_SQL_FILE = "/home/mehmet/Downloads/SQLStorm-master/v1.0/job/final_all/full_replaced_run_clique_final_700_1.sql"
+INPUT_SQL_FILE = "path_to_method_sql_queries"
 
-BASELINE_OUTPUT_CSV = "duckdb_query_timings_baselinetrueclique.csv"
-INJECTED_OUTPUT_CSV = "duckdb_query_timings_injectedtrueclique.csv"
+BASELINE_OUTPUT_CSV = "duckdb_runtimes.csv"
+INJECTED_OUTPUT_CSV = "duck_db_injected_runtimes.csv"
 
 LIKE_SELECTIVITY_FILE = os.path.abspath("like_selectivity.txt")
-INJECTION_LOG_FILE = "injected_selectivities_log_true_clique.txt"
-PLAN_CHANGE_LOG_FILE = "plan_changes_log_true_clique.txt"
+INJECTION_LOG_FILE = "injected_selectivities_log.txt"
+PLAN_CHANGE_LOG_FILE = "plan_changes_log.txt"
 
-# Only compute/inject exact selectivity for LIKE predicates on these specific
-# (table, column) pairs - matching the scope of the original injection files
-# (actor->name.name, akatitle->aka_title.title, charname->char_name.name,
-# company->company_name.name, title->title.title, keyword->keyword.keyword).
-# Predicates on any other column are left alone (DuckDB uses its own default
-# estimate for those, same as if no selectivity file existed at all).
 ALLOWED_COLUMNS = {
     ("name", "name"),
     ("aka_title", "title"),
