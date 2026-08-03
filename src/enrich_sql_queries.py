@@ -1,5 +1,5 @@
 """
-Enriches base SQL queries (e.g. from SQLStorm's generated JOB workload)
+Enriches base SQL queries ( from SQLStorm's generated JOB workload)
 into more realistic PostgreSQL analytics queries by adding additional
 WHERE-clause predicates via an LLM, following a strict set of structural,
 type-consistency, and schema-safety rules. Each enriched query is then
