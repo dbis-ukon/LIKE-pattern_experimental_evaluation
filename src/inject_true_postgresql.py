@@ -231,7 +231,7 @@ def load_selectivity_lookup(statements):
 
 
 TIMEOUT_MS = 3 * 60_000       # 3 minutes
-RUNS_PER_QUERY = 2            # up to 2 full passes per phase -> report
+RUNS_PER_QUERY = 3            # up to 3 full passes per phase -> report
                                # median/min/max/stdev, not just a single value.
 
 DB_CONFIG = {
