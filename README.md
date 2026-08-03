@@ -6,8 +6,10 @@ Cardinality estimation is a fundamental component of cost-based query optimizati
 
 We use SQLStorm to generate the SQL query workload for our benchmark. SQLStorm leverages Large Language Models (LLMs) to automatically generate diverse SQL queries from a given database schema. Please follow the setup instructions in the repository's README.md to run it.
 
-Method	Repository
-SQLStorm	github.com/SQL-Storm/SQLStorm
+| Method | Repository |
+|--------|------------|
+| SQLStorm | [github.com/SQL-Storm/SQLStorm](https://github.com/SQL-Storm/SQLStorm) |
+
 
 We use SQLStorm's source code with 8 prompts (its 7 predefined prompts, P1–P7, plus one additional prompt we introduce for single-table query generation) to generate our sample SQL queries.
 
