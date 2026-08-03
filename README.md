@@ -73,13 +73,6 @@ source ~/.bashrc
 
 #### Selectivity Injection
 
-You can override `LIKE`-predicate selectivity with externally supplied values from a plain text file, one `pattern<TAB>selectivity` entry per line.
-
-```bash
-printf "abc%%\t0.6\n" > like_selectivity.txt
-duckdb test.db -c "EXPLAIN SELECT * FROM title WHERE title LIKE 'abc%';"
-```
-
 The file is read from the current working directory by default, or from the path given in `DUCKDB_LIKE_SELECTIVITY_FILE` if set.
 
 ```bash
