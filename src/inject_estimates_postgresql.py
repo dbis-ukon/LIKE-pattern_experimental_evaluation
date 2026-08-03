@@ -10,20 +10,20 @@ import re
 # CONFIG
 # -----------------------
 
-INPUT_SQL_FILE = "/home/mehmet/Downloads/SQLStorm-master/v1.0/job/final_all/full_replaced_run_lplm_final_700_2.sql"
+INPUT_SQL_FILE = "path_to_method_sql_quries"
 
-BASELINE_OUTPUT_CSV = "postgres_query_timings_withoutdiscard_lplm2.csv"
-INJECTED_OUTPUT_CSV = "postgres_query_timings_injected_card_lplm2.csv"
+BASELINE_OUTPUT_CSV = "postgresql_runtimes.csv"
+INJECTED_OUTPUT_CSV = "postgresql_injected_runtimes.csv"
 PREDICATES_PATH = os.path.abspath("predicates.txt")
 SELECTIVITIES_PATH = os.path.abspath("selectivities.txt")
 
 INJECTION_FILES = {
-    "actor": "/home/mehmet/Documents/newbenchmarking_like/IMDB/lplmresults/actorinjection.txt",
-    "akatitle": "/home/mehmet/Documents/newbenchmarking_like/IMDB/lplmresults/akatitleinjection.txt",
-    "charname": "/home/mehmet/Documents/newbenchmarking_like/IMDB/lplmresults/charnameinjection.txt",
-    "company": "/home/mehmet/Documents/newbenchmarking_like/IMDB/lplmresults/companynameinjection.txt",
-    "title": "/home/mehmet/Documents/newbenchmarking_like/IMDB/lplmresults/titleinjection.txt",
-    "keyword": "/home/mehmet/Documents/newbenchmarking_like/IMDB/lplmresults/keywordsinjection.txt",
+    "actor": "actor_injection_estimates",
+    "akatitle": "akatitle_injection_estimates",
+    "charname": "charname_injection_estimates",
+    "company": "companyname_injection_estimates",
+    "title": "title_injection_estimates",
+    "keyword": "keywords_injection_estimates.txt",
 }
 
 INJECTION_FILE_TABLE_MAP = {
