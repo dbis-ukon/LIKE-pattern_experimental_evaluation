@@ -13,14 +13,14 @@ import statistics
 DUCKDB_BINARY = "./build/release/duckdb"
 DATABASE = "imdb.db"
 
-INPUT_SQL_FILE = "/home/mehmet/Downloads/SQLStorm-master/v1.0/job/final_all/full_replaced_run_clique_final_700_1.sql"
+INPUT_SQL_FILE = "path_to_method_sql_queries"
 
-BASELINE_OUTPUT_CSV = "duckdb_query_timings_baselineclique2.csv"
-INJECTED_OUTPUT_CSV = "duckdb_query_timings_injectedclique2.csv"
+BASELINE_OUTPUT_CSV = "duckdb_runtimes.csv"
+INJECTED_OUTPUT_CSV = "duck_db_injected_runtimes.csv"
 
 LIKE_SELECTIVITY_FILE = os.path.abspath("like_selectivity.txt")
-INJECTION_LOG_FILE = "injected_selectivities_logclique2.txt"
-PLAN_CHANGE_LOG_FILE = "plan_changes_logclique2.txt"
+INJECTION_LOG_FILE = "injected_selectivities_log.txt"
+PLAN_CHANGE_LOG_FILE = "plan_changes_log.txt"
 
 # Drop the OS page cache before every EXPLAIN / timed run, on both the
 # baseline and injected phases, so neither phase benefits from residual
@@ -31,12 +31,12 @@ DROP_OS_CACHE = True
 # NOTE: this dict was missing from the pasted file - restored using the
 # paths from earlier versions of this script. Update if they've changed.
 INJECTION_FILES = {
-    "actor":   "clique/actor_inject.csv",
-    "akatitle":"clique/akatitle_inject.csv",
-    "charname":"clique/charname_inject.csv",
-    "company": "clique/company_inject.csv",
-    "title":   "clique/title_inject.csv",
-    "keyword": "clique/keyword_inject.csv",
+    "actor":   "actor_inject_estimates.csv",
+    "akatitle":"akatitle_inject_estimates.csv",
+    "charname":charname_inject_estimates.csv",
+    "company": "company_inject_estimates.csv",
+    "title":   "title_inject_estimates.csv",
+    "keyword": "keyword_inject_estimates.csv",
 }
 
 
