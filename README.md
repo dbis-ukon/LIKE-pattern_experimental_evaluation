@@ -4,14 +4,24 @@ Cardinality estimation is critical for cost-based query optimization, and estima
 
 ## To Generate SQL Queries
 
-We use SQLStorm to generate the SQL query workload for our benchmark. SQLStorm leverages Large Language Models (LLMs) to automatically generate diverse SQL queries from a given database schema. Please follow the setup instructions in the repository's README.md to run it.
+We use [SQLStorm](https://github.com/SQL-Storm/SQLStorm) to generate the SQL query workload for our benchmark. SQLStorm leverages Large Language Models (LLMs) to automatically generate diverse SQL queries from a given database schema. Please follow the setup instructions in the repository's `README.md` to run it.
 
 | Method | Repository |
 |--------|------------|
 | SQLStorm | [github.com/SQL-Storm/SQLStorm](https://github.com/SQL-Storm/SQLStorm) |
 
-
 We use SQLStorm's source code with 8 prompts (its 7 predefined prompts, P1–P7, plus one additional prompt we introduce for single-table query generation) to generate our sample SQL queries.
+
+### Enriching Generated Queries
+
+After generating the base SQL queries with SQLStorm, we further enrich them using `enrich_queries.py` to increase predicate diversity and complexity. The script uses an LLM to add additional realistic filtering predicates to each query's `WHERE` clause, following a strict set of schema-safety, type-consistency, and structural rules, without modifying the `SELECT` clause, join structure, or existing predicates. Each enriched query is then passed through a second, self-review pass with the same model to catch and fix common validity issues before being written to disk.
+
+To run it, set your OpenAI API key as an environment variable and update the input/output/schema paths at the top of the script:
+
+```bash
+export OPENAI_API_KEY="your-key-here"
+python3 enrich_queries.py
+```
 
 ## How to Setup DBMS
 
