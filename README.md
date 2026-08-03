@@ -90,7 +90,7 @@ duckdb test.db -c "EXPLAIN SELECT * FROM title WHERE title LIKE 'abc%';"
 
 If no entry exists for a given pattern, DuckDB falls back to its own default selectivity estimate.
 
-## 3. To Run Cardinality Estimation Methods
+## 3. To Get Estimates for Cardinality Estimation Methods
 
 For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For LPLM, SSCard, and Astrid, please use the source code available at the links below. To obtain estimates for `LIKE`-predicates, follow the instructions in each method's source code `README.md` and its respective paper.
 
@@ -105,6 +105,8 @@ For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For 
 ## 4. Integration of Cardinality Estimates into PostgreSQL/DuckDB
 
 For each cardinality estimation method, prepare a `method_column.txt` file containing the `LIKE`-predicates evaluated by that method and their respective estimated selectivity, one `pattern<TAB>selectivity` entry per line. For example, `LPLM_keyword.txt` contains LPLM's estimated selectivities for `LIKE`-predicates over the `keyword` column.
+
+
 
 ## 5. Dataset
 
