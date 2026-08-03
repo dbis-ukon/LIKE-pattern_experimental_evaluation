@@ -104,8 +104,7 @@ For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For 
 
 ## 4. Integration of Cardinality Estimates into PostgreSQL/DuckDB
 
-For each cardinality estimation method, prepare a `method_column.txt` file containing the `LIKE`-predicates evaluated by that method and their respective estimated selectivity, one `pattern<TAB>selectivity` entry per line. For example, `LPLM_keyword.txt` contains LPLM's estimated selectivities for `LIKE`-predicates over the `keyword` column.
-
+For each cardinality estimation method, prepare a method_column.txt file containing the LIKE-predicates evaluated by that method and their respective estimated selectivity, one pattern<TAB>selectivity entry per line. For example, LPLM_actorname.txt contains LPLM's estimated selectivities for LIKE-predicates over the actor.name column. Sample files can be found in sampleEstimates.
 These files are then injected into PostgreSQL and DuckDB using the following scripts:
 
 | System | Injection Type | Script |
