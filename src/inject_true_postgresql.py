@@ -11,10 +11,10 @@ import re
 # CONFIG
 # -----------------------
 
-INPUT_SQL_FILE = "/home/mehmet/Downloads/SQLStorm-master/v1.0/job/final_all/full_replaced_run_lplm_final_700_2.sql"
+INPUT_SQL_FILE = "path_to_method_sql_quries"
 
-BASELINE_OUTPUT_CSV = "postgres_query_timings_withoutdiscard_lplmtrue2.csv"
-INJECTED_OUTPUT_CSV = "postgres_query_timings_injected_card_lplmtrue2.csv"
+BASELINE_OUTPUT_CSV = "postgresql_runtimes.csv"
+INJECTED_OUTPUT_CSV = "postgresql_injected_true_runtimes.csv"
 PREDICATES_PATH = os.path.abspath("predicates.txt")
 SELECTIVITIES_PATH = os.path.abspath("selectivities.txt")
 
