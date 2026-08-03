@@ -104,22 +104,25 @@ For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For 
 
 ## 4. Integration of Cardinality Estimates into PostgreSQL/DuckDB
 
-For each cardinality estimation method, prepare a method_column.txt file containing the LIKE-predicates evaluated by that method and their respective estimated selectivity, one pattern<TAB>selectivity entry per line. For example, LPLM_keyword.txt contains LPLM's estimated selectivities for LIKE-predicates over the keyword column.
+For each cardinality estimation method, prepare a `method_column.txt` file containing the `LIKE`-predicates evaluated by that method and their respective estimated selectivity, one `pattern<TAB>selectivity` entry per line. For example, `LPLM_keyword.txt` contains LPLM's estimated selectivities for `LIKE`-predicates over the `keyword` column.
 
 These files are then injected into PostgreSQL and DuckDB using the following scripts:
 
-System	Injection Type	Script
-DuckDB	Estimated cardinalities	inject_estimates_duckdb.py
-DuckDB	True cardinalities	inject_true_duckdb.py
-PostgreSQL	Estimated cardinalities	inject_estimates_postgresql.py
-PostgreSQL	True cardinalities	inject_true_postgresql.py
+| System | Injection Type | Script |
+|--------|----------------|--------|
+| DuckDB | Estimated cardinalities | `inject_estimates_duckdb.py` |
+| DuckDB | True cardinalities | `inject_true_duckdb.py` |
+| PostgreSQL | Estimated cardinalities | `inject_estimates_postgresql.py` |
+| PostgreSQL | True cardinalities | `inject_true_postgresql.py` |
 
 To run:
 
+```bash
 python3 inject_estimates_duckdb.py
 python3 inject_true_duckdb.py
 python3 inject_estimates_postgresql.py
 python3 inject_true_postgresql.py
+```
 
 
 ## 5. Dataset
