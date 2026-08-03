@@ -101,3 +101,7 @@ For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For 
 ## Integration of Cardinality Estimates into PostgreSQL/DuckDB
 
 For each cardinality estimation method, prepare a method_column.txt file containing the LIKE-predicates evaluated by that method and their respective estimated selectivity, one pattern<TAB>selectivity entry per line. For example, LPLM_keyword.txt contains LPLM's estimated selectivities for LIKE-predicates over the keyword column.
+
+## Dataset
+
+We use the IMDB dataset for our experiments. The dataset, along with its schema, can be downloaded [here](https://cloud.uni-konstanz.de/index.php/s/SjiRD5rHRFDHEQb).
