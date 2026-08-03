@@ -110,6 +110,6 @@ For each cardinality estimation method, prepare a `method_column.txt` file conta
 
 We use the IMDB dataset for our experiments. The dataset, along with its schema, can be downloaded [here](https://cloud.uni-konstanz.de/index.php/s/s2mY4QTzJN3NnA8).
 
-## Benchmark
+## 6. Benchmark
 
 LCEB contains 700 SQL queries, each including LIKE-predicates generated for LPLM. For any other cardinality estimation method, simply replace LCEB's LIKE-patterns with the patterns supported by that method.
