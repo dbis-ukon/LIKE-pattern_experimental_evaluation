@@ -102,12 +102,6 @@ For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For 
 
 For each cardinality estimation method, prepare a method_column.txt file containing the LIKE-predicates evaluated by that method and their respective estimated selectivity, one pattern<TAB>selectivity entry per line. For example, LPLM_keyword.txt contains LPLM's estimated selectivities for LIKE-predicates over the keyword column.
 
-Once these files are prepared, provide their paths to the injection code for both PostgreSQL and DuckDB.
-
-PostgreSQL
-sql
-stats=# SET ml_cardest_fname = '/absolute/path/to/method_column.txt';
-DuckDB
 bash
 export DUCKDB_LIKE_SELECTIVITY_FILE=/absolute/path/to/method_column.txt
 
