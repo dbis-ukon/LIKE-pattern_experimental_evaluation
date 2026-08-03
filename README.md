@@ -83,3 +83,32 @@ duckdb test.db -c "EXPLAIN SELECT * FROM title WHERE title LIKE 'abc%';"
 ```
 
 If no entry exists for a given pattern, DuckDB falls back to its own default selectivity estimate.
+
+
+## To Run Cardinality Estimation Methods
+
+For LBS, CLIQUE, and P-SPH, please use the source code we provide directly. For LPLM, SSCard, and Astrid, please use the source code available at the links below. To obtain estimates for `LIKE`-predicates, follow the instructions in each method's source code `README.md` and its respective paper.
+
+### Source Code for LPLM, Astrid, SSCard
+
+| Method | Repository |
+|--------|------------|
+| LPLM   | [github.com/dbis-ukon/lplm](https://github.com/dbis-ukon/lplm) |
+| Astrid | [github.com/saravanan-thirumuruganathan/astrid-string-selectivity](https://github.com/saravanan-thirumuruganathan/astrid-string-selectivity) |
+| SSCard | [github.com/marlcplhra/SSCard](https://github.com/marlcplhra/SSCard) |
+
+
+## Integration of Cardinality Estimates into PostgreSQL/DuckDB
+
+For each cardinality estimation method, prepare a method_column.txt file containing the LIKE-predicates evaluated by that method and their respective estimated selectivity, one pattern<TAB>selectivity entry per line. For example, LPLM_keyword.txt contains LPLM's estimated selectivities for LIKE-predicates over the keyword column.
+
+Once these files are prepared, provide their paths to the injection code for both PostgreSQL and DuckDB.
+
+PostgreSQL
+sql
+stats=# SET ml_cardest_fname = '/absolute/path/to/method_column.txt';
+DuckDB
+bash
+export DUCKDB_LIKE_SELECTIVITY_FILE=/absolute/path/to/method_column.txt
+
+or place the file as like_selectivity.txt in the working directory DuckDB is run from.
