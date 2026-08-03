@@ -6,10 +6,6 @@ import psycopg2
 from psycopg2 import errors
 import re
 
-# -----------------------
-# CONFIG
-# -----------------------
-
 INPUT_SQL_FILE = "path_to_method_sql_quries"
 
 BASELINE_OUTPUT_CSV = "postgresql_runtimes.csv"
