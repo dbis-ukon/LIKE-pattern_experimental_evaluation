@@ -16,7 +16,7 @@ To run it, set your OpenAI API key as an environment variable and update the inp
 
 ```bash
 export OPENAI_API_KEY="your-key-here"
-python3 enrich_queries.py
+python3 enrich_sql_queries.py
 ```
 
 ## 2. How to Setup DBMS
